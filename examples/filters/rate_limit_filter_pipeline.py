@@ -1,7 +1,7 @@
 import os
+import time
 from typing import List, Optional
 from pydantic import BaseModel
-import time
 
 
 class Pipeline:
@@ -15,9 +15,9 @@ class Pipeline:
 
     def __init__(self):
         self.type = "filter"
-        self.name = "Rate Limit Filter"
+        self.name = "Group-Based Rate Limit"
 
-        # Default valve setup (overwritten dynamically below)
+        # Prevent Open WebUI UI overrides by setting all to None initially
         self.valves = self.Valves(
             pipelines=["*"],
             requests_per_minute=None,
@@ -26,7 +26,7 @@ class Pipeline:
             sliding_window_minutes=None,
         )
 
-        # Rate limit configs per group
+        # Define limits per group
         self.group_limits = {
             "freemium": {
                 "requests_per_minute": None,
@@ -40,7 +40,7 @@ class Pipeline:
                 "sliding_window_limit": None,
                 "sliding_window_minutes": None,
             },
-            "admin": None  # Unlimited
+            "admin": None  # No limit
         }
 
         self.user_requests = {}
@@ -52,19 +52,23 @@ class Pipeline:
         print(f"on_shutdown:{__name__}")
 
     def prune_requests(self, user_id: str):
-        """Prune old requests outside rate windows."""
+        """Remove requests outside of their valid window."""
         now = time.time()
         if user_id in self.user_requests:
             self.user_requests[user_id] = [
                 req for req in self.user_requests[user_id]
                 if (
-                    (self.valves.requests_per_minute and now - req < 60) or
-                    (self.valves.requests_per_hour and now - req < 3600) or
-                    (self.valves.sliding_window_limit and now - req < self.valves.sliding_window_minutes * 60)
+                    (self.valves.requests_per_minute and now - req < 60)
+                    or (self.valves.requests_per_hour and now - req < 3600)
+                    or (
+                        self.valves.sliding_window_limit
+                        and now - req < self.valves.sliding_window_minutes * 60
+                    )
                 )
             ]
 
     def log_request(self, user_id: str):
+        """Store the timestamp of the user's request."""
         now = time.time()
         if user_id not in self.user_requests:
             self.user_requests[user_id] = []
@@ -90,22 +94,25 @@ class Pipeline:
 
     async def inlet(self, body: dict, user: Optional[dict] = None) -> dict:
         print(f"pipe:{__name__}")
-        print(body)
-        print(user)
+        print(f"Request body: {body}")
+        print(f"User object: {user}")
 
         role = user.get("role", "user")
         user_id = user.get("id", "default_user")
 
         if role == "admin":
-            return body  # No rate limit
+            print("Admin detected, bypassing limits.")
+            return body
 
-        group = user.get("group", "freemium")  # fallback if no group
+        group = user.get("group", "freemium")  # default to freemium
+        print(f"Detected group: {group}")
+
         limits = self.group_limits.get(group)
-
         if limits is None:
-            return body  # Unlimited group
+            print("No limits for group (unlimited).")
+            return body
 
-        # Set dynamic limits
+        # Dynamically assign limits based on group
         self.valves = self.Valves(
             pipelines=["*"],
             requests_per_minute=limits["requests_per_minute"],
@@ -114,8 +121,12 @@ class Pipeline:
             sliding_window_minutes=limits["sliding_window_minutes"],
         )
 
+        print(f"Applied limits: {self.valves.dict()}")
+
         if self.rate_limited(user_id):
+            print(f"User {user_id} in group '{group}' is rate limited.")
             raise Exception(f"Rate limit exceeded for group '{group}'. Please try again later.")
 
         self.log_request(user_id)
+        print(f"Logged request for user {user_id}")
         return body
