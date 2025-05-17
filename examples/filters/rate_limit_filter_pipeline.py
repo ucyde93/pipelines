@@ -35,7 +35,7 @@ class Pipeline:
                 "sliding_window_minutes": None,
             },
             "Paid Plan": {
-                "requests_per_minute": None,
+                "requests_per_minute": 1,
                 "requests_per_hour": 3,
                 "sliding_window_limit": None,
                 "sliding_window_minutes": None,
