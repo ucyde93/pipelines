@@ -96,8 +96,8 @@ class Pipeline:
         
         # Check if user is authenticated and has groups
         if user and "groups" in user and user["groups"]:
-            # Check if user is in the "Paid Plan" group
-            if "Paid Plan" in user["groups"]:
+            # Check if user is in the "Paid" group
+            if "Paid" in user["groups"]:
                 limits = {
                     "requests_per_minute": self.valves.paid_requests_per_minute,
                     "requests_per_hour": self.valves.paid_requests_per_hour,
@@ -175,8 +175,8 @@ class Pipeline:
         # Check if user is rate limited
         if self.rate_limited(user_id, user_limits):
             # Determine which limit was exceeded for better error messaging
-            if user and "groups" in user and "Paid Plan" in user["groups"]:
-                plan_type = "Paid Plan"
+            if user and "groups" in user and "Paid" in user["groups"]:
+                plan_type = "Paid"
             else:
                 plan_type = "Free Plan"
                 
