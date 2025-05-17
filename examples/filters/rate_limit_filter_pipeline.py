@@ -18,18 +18,21 @@ class Pipeline:
 
         # Default rate limits (for users without a group)
         default_requests_per_minute: Optional[int] = 5
-        default_requests_per_hour: Optional[int] = 100
+        default_requests_per_hour: Optional[int] = 50
         default_sliding_window_limit: Optional[int] = 25
         default_sliding_window_minutes: Optional[int] = 15
 
-        # Rate limits for paid plan users
-        paid_requests_per_minute: Optional[int] = 20
-        paid_requests_per_hour: Optional[int] = 1000
-        paid_sliding_window_limit: Optional[int] = 250
-        paid_sliding_window_minutes: Optional[int] = 30
+        # Silver plan rate limits
+        silver_requests_per_minute: Optional[int] = 20
+        silver_requests_per_hour: Optional[int] = 300
+        silver_sliding_window_limit: Optional[int] = 100
+        silver_sliding_window_minutes: Optional[int] = 15
         
-        # You can add more user groups here as needed
-        # Example: premium_requests_per_minute: Optional[int] = 50
+        # Gold plan rate limits
+        gold_requests_per_minute: Optional[int] = 40
+        gold_requests_per_hour: Optional[int] = 1000
+        gold_sliding_window_limit: Optional[int] = 200
+        gold_sliding_window_minutes: Optional[int] = 15
 
     def __init__(self):
         # Pipeline filters are only compatible with Open WebUI
@@ -46,7 +49,7 @@ class Pipeline:
                     os.getenv("DEFAULT_RATE_LIMIT_RPM", 5)
                 ),
                 "default_requests_per_hour": int(
-                    os.getenv("DEFAULT_RATE_LIMIT_RPH", 100)
+                    os.getenv("DEFAULT_RATE_LIMIT_RPH", 50)
                 ),
                 "default_sliding_window_limit": int(
                     os.getenv("DEFAULT_RATE_LIMIT_SWL", 25)
@@ -55,18 +58,32 @@ class Pipeline:
                     os.getenv("DEFAULT_RATE_LIMIT_SWM", 15)
                 ),
                 
-                # Paid user limits
-                "paid_requests_per_minute": int(
-                    os.getenv("PAID_RATE_LIMIT_RPM", 20)
+                # Silver plan limits
+                "silver_requests_per_minute": int(
+                    os.getenv("SILVER_RATE_LIMIT_RPM", 20)
                 ),
-                "paid_requests_per_hour": int(
-                    os.getenv("PAID_RATE_LIMIT_RPH", 1000)
+                "silver_requests_per_hour": int(
+                    os.getenv("SILVER_RATE_LIMIT_RPH", 300)
                 ),
-                "paid_sliding_window_limit": int(
-                    os.getenv("PAID_RATE_LIMIT_SWL", 250)
+                "silver_sliding_window_limit": int(
+                    os.getenv("SILVER_RATE_LIMIT_SWL", 100)
                 ),
-                "paid_sliding_window_minutes": int(
-                    os.getenv("PAID_RATE_LIMIT_SWM", 30)
+                "silver_sliding_window_minutes": int(
+                    os.getenv("SILVER_RATE_LIMIT_SWM", 15)
+                ),
+                
+                # Gold plan limits
+                "gold_requests_per_minute": int(
+                    os.getenv("GOLD_RATE_LIMIT_RPM", 40)
+                ),
+                "gold_requests_per_hour": int(
+                    os.getenv("GOLD_RATE_LIMIT_RPH", 1000)
+                ),
+                "gold_sliding_window_limit": int(
+                    os.getenv("GOLD_RATE_LIMIT_SWL", 200)
+                ),
+                "gold_sliding_window_minutes": int(
+                    os.getenv("GOLD_RATE_LIMIT_SWM", 15)
                 ),
             }
         )
@@ -96,19 +113,23 @@ class Pipeline:
         
         # Check if user is authenticated and has groups
         if user and "groups" in user and user["groups"]:
-            # Check if user is in the "Paid" group
-            if "Paid" in user["groups"]:
+            # Check for Silver group
+            if "Silver" in user["groups"]:
                 limits = {
-                    "requests_per_minute": self.valves.paid_requests_per_minute,
-                    "requests_per_hour": self.valves.paid_requests_per_hour,
-                    "sliding_window_limit": self.valves.paid_sliding_window_limit,
-                    "sliding_window_minutes": self.valves.paid_sliding_window_minutes
+                    "requests_per_minute": self.valves.silver_requests_per_minute,
+                    "requests_per_hour": self.valves.silver_requests_per_hour,
+                    "sliding_window_limit": self.valves.silver_sliding_window_limit,
+                    "sliding_window_minutes": self.valves.silver_sliding_window_minutes
                 }
             
-            # Add additional group checks here if needed
-            # Example:
-            # elif "Premium Plan" in user["groups"]:
-            #     limits = {...premium limits...}
+            # Check for Gold group (higher priority than Silver)
+            if "Gold" in user["groups"]:
+                limits = {
+                    "requests_per_minute": self.valves.gold_requests_per_minute,
+                    "requests_per_hour": self.valves.gold_requests_per_hour,
+                    "sliding_window_limit": self.valves.gold_sliding_window_limit,
+                    "sliding_window_minutes": self.valves.gold_sliding_window_minutes
+                }
         
         return limits
 
@@ -136,28 +157,65 @@ class Pipeline:
             self.user_requests[user_id] = []
         self.user_requests[user_id].append(now)
 
+    def check_which_limit_exceeded(self, user_id: str, limits: Dict) -> str:
+        """Determine which specific rate limit was exceeded."""
+        user_reqs = self.user_requests.get(user_id, [])
+        now = time.time()
+        
+        # Check minute limit
+        requests_last_minute = sum(1 for req in user_reqs if now - req < 60)
+        if requests_last_minute >= limits["requests_per_minute"]:
+            return "minute"
+            
+        # Check hour limit
+        requests_last_hour = sum(1 for req in user_reqs if now - req < 3600)
+        if requests_last_hour >= limits["requests_per_hour"]:
+            return "hour"
+            
+        # Check sliding window limit
+        sliding_window_time = limits["sliding_window_minutes"] * 60
+        requests_in_window = sum(1 for req in user_reqs if now - req < sliding_window_time)
+        if requests_in_window >= limits["sliding_window_limit"]:
+            return f"sliding window ({limits['sliding_window_minutes']} minutes)"
+            
+        return "none"
+
     def rate_limited(self, user_id: str, limits: Dict) -> bool:
         """Check if a user is rate limited based on their group's limits."""
         self.prune_requests(user_id, limits)
 
         user_reqs = self.user_requests.get(user_id, [])
+        now = time.time()
 
         if limits["requests_per_minute"] is not None:
-            requests_last_minute = sum(1 for req in user_reqs if time.time() - req < 60)
+            requests_last_minute = sum(1 for req in user_reqs if now - req < 60)
             if requests_last_minute >= limits["requests_per_minute"]:
                 return True
 
         if limits["requests_per_hour"] is not None:
-            requests_last_hour = sum(1 for req in user_reqs if time.time() - req < 3600)
+            requests_last_hour = sum(1 for req in user_reqs if now - req < 3600)
             if requests_last_hour >= limits["requests_per_hour"]:
                 return True
 
         if limits["sliding_window_limit"] is not None:
-            requests_in_window = len(user_reqs)
+            sliding_window_time = limits["sliding_window_minutes"] * 60
+            requests_in_window = sum(1 for req in user_reqs if now - req < sliding_window_time)
             if requests_in_window >= limits["sliding_window_limit"]:
                 return True
 
         return False
+
+    def get_user_group(self, user: Optional[dict]) -> str:
+        """Get the user's group name for potential upgrading information."""
+        if not user or "groups" not in user or not user["groups"]:
+            return "Default"
+        
+        if "Gold" in user["groups"]:
+            return "Gold"
+        elif "Silver" in user["groups"]:
+            return "Silver"
+        
+        return "Default"
 
     async def inlet(self, body: dict, user: Optional[dict] = None) -> dict:
         print(f"pipe:{__name__}")
@@ -174,13 +232,19 @@ class Pipeline:
         
         # Check if user is rate limited
         if self.rate_limited(user_id, user_limits):
-            # Determine which limit was exceeded for better error messaging
-            if user and "groups" in user and "Paid" in user["groups"]:
-                plan_type = "Paid"
+            # Get user's current group
+            current_group = self.get_user_group(user)
+            
+            # Determine which specific limit was exceeded
+            limit_type = self.check_which_limit_exceeded(user_id, user_limits)
+            
+            # Create appropriate error message
+            if current_group == "Gold":
+                error_msg = f"Usage limit reached: You've hit your {limit_type} request limit. Please wait until the limit resets."
             else:
-                plan_type = "Free Plan"
+                error_msg = f"Usage limit reached: You've hit your {limit_type} request limit. Upgrade to continue now or wait until the limit resets."
                 
-            raise Exception(f"Rate limit exceeded for {plan_type}. Please try again later.")
+            raise Exception(error_msg)
 
         # Log this request
         self.log_request(user_id)
